@@ -1,103 +1,267 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <title>Force-Directed States of America</title>
-    <script type="text/javascript" src="http://mbostock.github.com/d3/d3.js?1.26.0"></script>
-    <script type="text/javascript" src="http://mbostock.github.com/d3/d3.geo.js?1.26.0"></script>
-    <script type="text/javascript" src="http://mbostock.github.com/d3/d3.geom.js?1.26.0"></script>
-    <script type="text/javascript" src="http://mbostock.github.com/d3/d3.layout.js?1.26.0"></script>
-    <style type="text/css">
+<meta charset="utf-8">
 
-path {
-  fill: #ddd;
-  fill-opacity: .8;
-  stroke: #fff;
-  stroke-width: 1.5px;
+<style>
+
+.link {
+  stroke: #ccc;
 }
 
-line {
-  stroke: #999;
-}
+</style>
 
-    </style>
-  </head>
-  <body>
-    <script type="text/javascript">
+<script src="http://d3js.org/d3.v3.min.js"></script>
 
-var w = 960,
-    h = 500;
+<script>
+  var WIDTH = 960,
+      HEIGHT = 500,
+      MARGINS = {top: 110, right: 110, bottom: 110, left: 110}, // margins around the graph
+      duration = 1500,
+      xRange = d3.scale.linear().range([MARGINS.left, WIDTH - MARGINS.right]),
+      yRange = d3.scale.linear().range([HEIGHT - MARGINS.top, MARGINS.bottom]),
+      vis, circles, forceLabels,
+      labelLinkGroup, labelParentSelection, labelChildSelection;
 
-var path = d3.geo.path(),
-    force = d3.layout.force().size([w, h]);
+  // Create a test dataset with labels and do the redraw
+  //
+  function init(){
+    var input = d3.range(100).map(function(i) {
+      var x = Math.round(Math.random()*100), y=Math.round(Math.random()*100);
+      return { id: i, x: x, y: y, label: x + ',' + y };
+    }),
+    color = d3.scale.category10();
 
-var svg = d3.select("body").append("svg:svg")
-    .attr("width", w)
-    .attr("height", h);
+    vis = d3.select("body").append("svg")
+      .attr("width", WIDTH)
+      .attr("height", HEIGHT);
 
-d3.json("readme.json", function(states) {
-  var nodes = [],
-      links = [];
+    // The group into which the circle data will be drawn
+    //
+    circles = vis.append("svg:g").attr("class", "maingraph");
 
-  states.features.forEach(function(d, i) {
-    if (d.id == "02" || d.id == "15" || d.id == "72") return; // lower 48
-    var centroid = path.centroid(d);
-    centroid.x = centroid[0];
-    centroid.y = centroid[1];
-    centroid.feature = d;
-    nodes.push(centroid);
-  });
+    // The group into which the labels will be drawn
+    //
+    forceLabels = vis.append("svg:g").attr("class", "forceLabels");
 
-  d3.geom.delaunay(nodes).forEach(function(d) {
-    links.push(edge(d[0], d[1]));
-    links.push(edge(d[1], d[2]));
-    links.push(edge(d[2], d[0]));
-  });
+    redraw(input, color);
+  }
 
-  force
+  // Redraw the circles representing the input.  When done, render
+  // the labels as a force graph
+  //
+  function redraw(input, color){
+    var datapoints = circles.selectAll(".circle")
+        .data(input, function(d) {return d.id;}); // select the data points and set their keys
+
+    // The data domains or desired axes might have changed, so update them all.
+    // Set these before doing enter(), so we see a nice entry transition
+    //
+    xRange.domain([
+      d3.min(input, function(d) { return d.x; }),
+      d3.max(input, function(d) { return d.x; })
+    ]);
+    yRange.domain([
+      d3.min(input, function(d) { return d.y; }),
+      d3.max(input, function(d) { return d.y; })
+    ]);
+
+    // Add new points if they're needed
+    //
+    datapoints.enter()
+      .insert("svg:circle")
+        .attr("cx", function(d) { return xRange(d.x); })
+        .attr("cy", function(d) { return yRange(d.y); })
+        .attr("r", function(d) { return 0; })
+        .attr("class", "circle")
+        .style("fill", function(d, i) { return color(i%3); })
+        .style("stroke-width", 1.5)
+        .style("opacity", 0);
+
+    // Erase current labels
+    //
+    redrawForceLabels([], duration);
+
+    // Transition the points.  When the circles are finished being drawn,
+    // draw the labels on top of them.
+    //
+    var nCircle = input.length;
+    datapoints
+      .transition().duration(duration).ease("exp-in-out")
+      .style("opacity", 1)
+      .attr("fill", '#888')
+      .attr("r", 5)
+      .attr("cx", function(d) { return xRange(d.x); })
+      .attr("cy", function(d) { return yRange(d.y); })
+      .each("end", function(d, i){
+        if( i==nCircle-1 ) redrawForceLabels(input, duration);
+      })
+
+    // remove points if we don't need them anymore
+    //
+    datapoints.exit()
+      .transition().duration(duration).ease("exp-in-out")
+        .style("opacity", 0)
+        .attr("r", 0)
+          .remove();
+  }
+
+  // This labels the graph using the force layout
+  //
+  function redrawForceLabels(input, duration){
+
+    // This runs the incremental force algorithm
+    //
+    function labelTick(e) {
+      labelLinkGroup
+        .attr("x1", function(d) { return d.source.x; })
+        .attr("y1", function(d) { return d.source.y; })
+        .attr("x2", function(d) { return d.target.x; })
+        .attr("y2", function(d) { return d.target.y; });
+
+      labelParentSelection
+        .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")";});
+
+      labelChildSelection
+        .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")";});
+    }
+
+    var forceLabelLayout = d3.layout.force()
+      .charge(-100)
       .gravity(0)
-      .nodes(nodes)
+      .linkDistance(0)
+      .on("tick", labelTick)
+      .size([WIDTH, HEIGHT]);
+
+    // Given the input, create a tree structure, flatten it, and
+    // divide it into parents (drawn on top of the input circles) and
+    // children (where the labels will be drawn).
+    //
+    var flatLabelData = flatten(createLabelTree(input));
+    var parents = getParents(flatLabelData);
+    var children = getChildren(flatLabelData);
+
+    var links = d3.layout.tree().links(flatLabelData);
+
+    // Restart the force layout.
+    //
+    forceLabelLayout
+      .nodes(flatLabelData)
       .links(links)
-      .linkDistance(function(d) { return d.distance; })
       .start();
 
-  var link = svg.selectAll("line")
-      .data(links)
-    .enter().append("svg:line")
+    // Update the links…
+    //
+    labelLinkGroup = forceLabels.selectAll("line.labelLink")
+      .data(links, function(d) { return d.target.id; });
+
+    // Enter any new links.
+    //
+    labelLinkGroup.enter().insert("svg:line", ".node")
+      .attr("class", "link")
       .attr("x1", function(d) { return d.source.x; })
       .attr("y1", function(d) { return d.source.y; })
       .attr("x2", function(d) { return d.target.x; })
       .attr("y2", function(d) { return d.target.y; });
 
-  var node = svg.selectAll("g")
-      .data(nodes)
-    .enter().append("svg:g")
-      .attr("transform", function(d) { return "translate(" + -d.x + "," + -d.y + ")"; })
-      .call(force.drag)
-    .append("svg:path")
-      .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; })
-      .attr("d", function(d) { return path(d.feature); });
+    // Exit any old links.
+    //
+    labelLinkGroup.exit()
+        .transition().duration(duration).ease("exp-in-out")
+        .style("opacity", 0)
+          .remove();
 
-  force.on("tick", function(e) {
-    link.attr("x1", function(d) { return d.source.x; })
-        .attr("y1", function(d) { return d.source.y; })
-        .attr("x2", function(d) { return d.target.x; })
-        .attr("y2", function(d) { return d.target.y; });
+    // Draw the parents as tiny circles.  Don't call forceLabelLayout.drag,
+    // since we don't want interactivity.  Their positions are fixed.
+    //
+    labelParentSelection = forceLabels.selectAll("circle.labelParent")
+      .data(parents, function(d) { return d.id; })
 
-    node.attr("transform", function(d) {
-      return "translate(" + d.x + "," + d.y + ")";
-    });
-  });
-});
+    labelParentSelection.enter().append("svg:circle")
+      .attr("class", "labelParent")
+      .attr("r", 1)
 
-function edge(a, b) {
-  var dx = a[0] - b[0], dy = a[1] - b[1];
-  return {
-    source: a,
-    target: b,
-    distance: Math.sqrt(dx * dx + dy * dy)
-  };
-}
+    // Exit any old parent nodes.
+    //
+    labelParentSelection.exit()
+      .transition().duration(duration).ease("exp-in-out")
+      .style("opacity", 0)
+        .remove();
 
-    </script>
-  </body>
-</html>
+    // Draw children as text
+    //
+    labelChildSelection = forceLabels.selectAll("text.labelChild")
+      .data(children, function(d) { return d.id; })
+
+    labelChildSelection.enter().append("svg:text")
+      .attr("text-anchor", "middle")
+      .attr("class", "labelChild")
+      .style("fill", "black")
+      .style("font-size", "8px")
+      .style("opacity", 1.0)
+      .text( function(d) { return d.label; })
+      .attr("cursor", "pointer")
+      .call(forceLabelLayout.drag);
+
+    // Exit any old child nodes.
+    //
+    labelChildSelection.exit()
+        .transition().duration(duration).ease("exp-in-out")
+        .style("opacity", 0)
+          .remove();
+  }
+
+  function createLabelTree(data){
+    var res = [];
+
+    data.forEach(function(d){
+      var child = { 
+        id: d.id,
+        label: d.label,
+        x: xRange(d.x),
+        y: yRange(d.y)
+      };
+      var parent = { 
+        id: d.id,
+        fixed: true,
+        x: xRange(d.x),
+        y: yRange(d.y),
+        children: [child]
+      };
+      res.push(parent);
+    })
+    return res;
+  }
+
+  function getChildren(nodes){
+    var res = [];
+    nodes.forEach(function(v){
+      if( !v.children ) res.push(v);
+    })
+    return res;
+  }
+  function getParents(nodes){
+    var res = [];
+    nodes.forEach(function(v){
+      if( v.children ) res.push(v);
+    })
+    return res;
+  }
+
+  // Returns a list of all nodes under the root.
+  //
+  function flatten(root) {
+    var res = [], i = 0;
+  
+    function recurse(node) {
+      if (node.children) node.children.forEach(recurse);
+      if (node.id==null) node.id = ++i;
+      res.push(node);
+    }
+    root.forEach(function(v, i){ recurse(root[i]); });
+
+    return res;
+  }
+
+  // Do the visualization
+  //
+  window.onload = init;
+</script>
